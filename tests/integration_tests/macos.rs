@@ -9,6 +9,89 @@ use framehop::Unwinder;
 use super::common;
 
 #[test]
+fn foo() {
+    // use framehop::aarch64::{CacheAarch64, UnwindRegsAarch64, UnwinderAarch64};
+    use framehop::x86_64::{CacheX86_64, UnwindRegsX86_64, UnwinderX86_64};
+    use framehop::{ExplicitModuleSectionInfo, FrameAddress, Module};
+
+    let mut cache = CacheX86_64::<_>::new();
+    let mut unwinder = UnwinderX86_64::new();
+
+    let module = Module::new(
+        "mybinary".to_string(),
+        0x1003fc000..0x100634000,
+        0x1003fc000,
+        ExplicitModuleSectionInfo {
+            base_svma: 0x100000000,
+            text_svma: Some(0x100000b64..0x1001d2d18),
+            text: Some(vec![/* __text */]),
+            stubs_svma: Some(0x1001d2d18..0x1001d309c),
+            stub_helper_svma: Some(0x1001d309c..0x1001d3438),
+            got_svma: Some(0x100238000..0x100238010),
+            unwind_info: Some(vec![/* __unwind_info */]),
+            eh_frame_svma: Some(0x100237f80..0x100237ffc),
+            eh_frame: Some(vec![/* __eh_frame */]),
+            text_segment_svma: Some(0x1003fc000..0x100634000),
+            text_segment: Some(vec![/* __TEXT */]),
+            ..Default::default()
+        },
+    );
+    unwinder.add_module(module);
+
+    let pc = 0x1003fc000 + 0x1292c0;
+    let lr = 0x1003fc000 + 0xe4830;
+    let sp = 0x10;
+    let fp = 0x20;
+    let stack = [
+        // 低いアドレス
+        // ↑ に向かってstackが伸びる(はず)
+        1,
+        2,
+        3, // <- sp
+        4,
+        0x40,                   // 1つ前のframeのptr (今のrbpとは違う値)
+        0x1003fc000 + 0x100dc4, // return addr
+        // ---
+        5,
+        6,
+        0x70,                   // rbp (このアドレスは0x40)
+        0x1003fc000 + 0x12ca28, // return addr
+        // ---
+        7,
+        8,
+        9,
+        10,
+        0x0, // rbp (このアドレスは0x70)
+        0x0, // return addr
+
+             // 高いアドレス
+    ];
+    let mut read_stack = |addr| stack.get((addr / 8) as usize).cloned().ok_or(());
+
+    use framehop::Unwinder;
+    let mut iter = unwinder.iter_frames(
+        pc,
+        UnwindRegsX86_64::new(lr, sp, fp),
+        &mut cache,
+        &mut read_stack,
+    );
+
+    let mut frames = Vec::new();
+    while let Ok(Some(frame)) = iter.next() {
+        frames.push(frame);
+    }
+
+    assert_eq!(
+        frames,
+        vec![
+            FrameAddress::from_instruction_pointer(0x1003fc000 + 0x1292c1),
+            FrameAddress::from_return_address(0x1003fc000 + 0x100dc4).unwrap(),
+            FrameAddress::from_return_address(0x1003fc000 + 0x12ca28).unwrap()
+        ]
+    );
+}
+
+#[test]
 fn test_basic() {
     let mut cache = CacheAarch64::<_>::new();
     let mut unwinder = UnwinderAarch64::new();
